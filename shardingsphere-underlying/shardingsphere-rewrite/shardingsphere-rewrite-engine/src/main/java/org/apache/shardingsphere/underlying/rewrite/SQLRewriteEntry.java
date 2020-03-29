@@ -18,13 +18,16 @@
 package org.apache.shardingsphere.underlying.rewrite;
 
 import lombok.RequiredArgsConstructor;
+import org.apache.shardingsphere.sql.parser.binder.metadata.schema.SchemaMetaData;
 import org.apache.shardingsphere.sql.parser.binder.statement.SQLStatementContext;
-import org.apache.shardingsphere.underlying.common.constant.properties.ShardingSphereProperties;
-import org.apache.shardingsphere.underlying.common.metadata.ShardingSphereMetaData;
+import org.apache.shardingsphere.underlying.common.config.properties.ConfigurationProperties;
 import org.apache.shardingsphere.underlying.common.rule.BaseRule;
 import org.apache.shardingsphere.underlying.rewrite.context.SQLRewriteContext;
 import org.apache.shardingsphere.underlying.rewrite.context.SQLRewriteContextDecorator;
+import org.apache.shardingsphere.underlying.rewrite.sql.token.generator.aware.RouteContextAware;
+import org.apache.shardingsphere.underlying.route.context.RouteContext;
 
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Map.Entry;
@@ -35,9 +38,21 @@ import java.util.Map.Entry;
 @RequiredArgsConstructor
 public final class SQLRewriteEntry {
     
-    private final ShardingSphereMetaData metaData;
+    private final SchemaMetaData schemaMetaData;
     
-    private final ShardingSphereProperties properties;
+    private final ConfigurationProperties properties;
+    
+    private final Map<BaseRule, SQLRewriteContextDecorator> decorators = new LinkedHashMap<>();
+    
+    /**
+     * Register route decorator.
+     *
+     * @param rule rule
+     * @param decorator SQL rewrite context decorator
+     */
+    public void registerDecorator(final BaseRule rule, final SQLRewriteContextDecorator decorator) {
+        decorators.put(rule, decorator);
+    }
     
     /**
      * Create SQL rewrite context.
@@ -45,21 +60,25 @@ public final class SQLRewriteEntry {
      * @param sql SQL
      * @param parameters parameters
      * @param sqlStatementContext SQL statement context
-     * @param decorators SQL rewrite context decorators
+     * @param routeContext route context
      * @return SQL rewrite context
      */
-    public SQLRewriteContext createSQLRewriteContext(final String sql, final List<Object> parameters, 
-                                                     final SQLStatementContext sqlStatementContext, final Map<BaseRule, SQLRewriteContextDecorator> decorators) {
-        SQLRewriteContext result = new SQLRewriteContext(metaData.getTables(), sqlStatementContext, sql, parameters);
-        decorate(decorators, result);
+    public SQLRewriteContext createSQLRewriteContext(final String sql, final List<Object> parameters, final SQLStatementContext sqlStatementContext, final RouteContext routeContext) {
+        SQLRewriteContext result = new SQLRewriteContext(schemaMetaData, sqlStatementContext, sql, parameters);
+        decorate(decorators, result, routeContext);
         result.generateSQLTokens();
         return result;
     }
     
     @SuppressWarnings("unchecked")
-    private void decorate(final Map<BaseRule, SQLRewriteContextDecorator> decorators, final SQLRewriteContext sqlRewriteContext) {
+    private void decorate(final Map<BaseRule, SQLRewriteContextDecorator> decorators, final SQLRewriteContext sqlRewriteContext, final RouteContext routeContext) {
         for (Entry<BaseRule, SQLRewriteContextDecorator> entry : decorators.entrySet()) {
-            entry.getValue().decorate(entry.getKey(), properties, sqlRewriteContext);
+            BaseRule rule = entry.getKey();
+            SQLRewriteContextDecorator decorator = entry.getValue();
+            if (decorator instanceof RouteContextAware) {
+                ((RouteContextAware) decorator).setRouteContext(routeContext);
+            }
+            decorator.decorate(rule, properties, sqlRewriteContext);
         }
     }
 }

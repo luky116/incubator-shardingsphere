@@ -20,6 +20,7 @@ package org.apache.shardingsphere.sql.parser.integrate.asserts.segment.definitio
 import lombok.AccessLevel;
 import lombok.NoArgsConstructor;
 import org.apache.shardingsphere.sql.parser.integrate.asserts.SQLCaseAssertContext;
+import org.apache.shardingsphere.sql.parser.integrate.asserts.segment.SQLSegmentAssert;
 import org.apache.shardingsphere.sql.parser.integrate.jaxb.domain.segment.impl.definition.ExpectedColumnPosition;
 import org.apache.shardingsphere.sql.parser.sql.segment.ddl.column.position.ColumnAfterPositionSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.ddl.column.position.ColumnPositionSegment;
@@ -43,19 +44,22 @@ public final class ColumnPositionAssert {
      * @param expected expected column position
      */
     public static void assertIs(final SQLCaseAssertContext assertContext, final ColumnPositionSegment actual, final ExpectedColumnPosition expected) {
-        String columnname = null;
+        String actualColumn = null;
         if (null != actual.getColumnName()) {
-            columnname = actual.getColumnName().getQualifiedName();
+            actualColumn = actual.getColumnName().getQualifiedName();
         }
-        assertThat(assertContext.getText("Column change position name assertion error: "), columnname, is(expected.getColumn().getName()));
-        // TODO assert start index and stop index
+        String expectColumn = null;
+        if (null != expected.getColumn()) {
+            expectColumn = expected.getColumn().getName();
+        }
+        assertThat(assertContext.getText("Column change position name assertion error: "), actualColumn, is(expectColumn));
         if (actual instanceof ColumnAfterPositionSegment) {
-            assertNotNull(assertContext.getText("Assignments should exist."), expected.getAfterColumn());
-            assertThat(assertContext.getText("Column change position after name assertion error: "), 
-                    ((ColumnAfterPositionSegment) actual).getAfterColumnName(), is(expected.getAfterColumn().getName()));
-            // TODO assert start index and stop index
+            assertNotNull(assertContext.getText("Assignments should exist."), expected.getColumn());
+            assertThat(assertContext.getText("Column change position after name assertion error: "), actual.getColumnName().getIdentifier().getValue(), is(expected.getColumn().getName()));
+            
         } else {
-            assertNull(assertContext.getText("Assignments should not exist."), expected.getAfterColumn());
+            assertNull(assertContext.getText("Assignments should not exist."), expected.getColumn());
         }
+        SQLSegmentAssert.assertIs(assertContext, actual, expected);
     }
 }

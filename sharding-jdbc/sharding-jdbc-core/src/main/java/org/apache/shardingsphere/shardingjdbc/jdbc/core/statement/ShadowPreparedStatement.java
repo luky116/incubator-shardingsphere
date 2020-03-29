@@ -20,32 +20,28 @@ package org.apache.shardingsphere.shardingjdbc.jdbc.core.statement;
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.shardingsphere.core.rule.ShadowRule;
 import org.apache.shardingsphere.shadow.rewrite.context.ShadowSQLRewriteContextDecorator;
 import org.apache.shardingsphere.shadow.rewrite.judgement.ShadowJudgementEngine;
 import org.apache.shardingsphere.shadow.rewrite.judgement.impl.PreparedJudgementEngine;
 import org.apache.shardingsphere.shardingjdbc.jdbc.adapter.AbstractShardingPreparedStatementAdapter;
 import org.apache.shardingsphere.shardingjdbc.jdbc.core.connection.ShadowConnection;
 import org.apache.shardingsphere.sql.parser.binder.SQLStatementContextFactory;
+import org.apache.shardingsphere.sql.parser.binder.metadata.schema.SchemaMetaData;
 import org.apache.shardingsphere.sql.parser.binder.statement.SQLStatementContext;
 import org.apache.shardingsphere.sql.parser.sql.statement.SQLStatement;
-import org.apache.shardingsphere.underlying.common.constant.properties.PropertiesConstant;
-import org.apache.shardingsphere.underlying.common.rule.BaseRule;
+import org.apache.shardingsphere.underlying.common.config.properties.ConfigurationPropertyKey;
 import org.apache.shardingsphere.underlying.executor.context.SQLUnit;
 import org.apache.shardingsphere.underlying.rewrite.SQLRewriteEntry;
 import org.apache.shardingsphere.underlying.rewrite.context.SQLRewriteContext;
-import org.apache.shardingsphere.underlying.rewrite.context.SQLRewriteContextDecorator;
 import org.apache.shardingsphere.underlying.rewrite.engine.SQLRewriteResult;
-import org.apache.shardingsphere.underlying.rewrite.engine.impl.DefaultSQLRewriteEngine;
+import org.apache.shardingsphere.underlying.rewrite.engine.SQLRewriteEngine;
 
 import java.sql.PreparedStatement;
 import java.sql.ResultSet;
 import java.sql.SQLException;
 import java.sql.Statement;
 import java.util.Collection;
-import java.util.HashMap;
 import java.util.LinkedList;
-import java.util.Map;
 
 /**
  * Shadow prepared statement.
@@ -172,24 +168,20 @@ public final class ShadowPreparedStatement extends AbstractShardingPreparedState
     @SuppressWarnings("unchecked")
     private SQLUnit getSQLUnit(final String sql) {
         SQLStatement sqlStatement = connection.getRuntimeContext().getSqlParserEngine().parse(sql, true);
-        SQLStatementContext sqlStatementContext = SQLStatementContextFactory.newInstance(connection.getRuntimeContext().getMetaData().getTables(), sql, getParameters(), sqlStatement);
+        SchemaMetaData schemaMetaData = connection.getRuntimeContext().getMetaData().getSchema();
+        SQLStatementContext sqlStatementContext = SQLStatementContextFactory.newInstance(schemaMetaData, sql, getParameters(), sqlStatement);
         ShadowJudgementEngine shadowJudgementEngine = new PreparedJudgementEngine(connection.getRuntimeContext().getRule(), sqlStatementContext, getParameters());
         isShadowSQL = shadowJudgementEngine.isShadowSQL();
-        SQLRewriteContext sqlRewriteContext = new SQLRewriteEntry(connection.getRuntimeContext().getMetaData(), connection.getRuntimeContext().getProperties())
-                .createSQLRewriteContext(sql, getParameters(), sqlStatementContext, createSQLRewriteContextDecorator(connection.getRuntimeContext().getRule()));
-        SQLRewriteResult sqlRewriteResult = new DefaultSQLRewriteEngine().rewrite(sqlRewriteContext);
+        SQLRewriteEntry sqlRewriteEntry = new SQLRewriteEntry(schemaMetaData, connection.getRuntimeContext().getProperties());
+        sqlRewriteEntry.registerDecorator(connection.getRuntimeContext().getRule(), new ShadowSQLRewriteContextDecorator());
+        SQLRewriteContext sqlRewriteContext = sqlRewriteEntry.createSQLRewriteContext(sql, getParameters(), sqlStatementContext, null);
+        SQLRewriteResult sqlRewriteResult = new SQLRewriteEngine().rewrite(sqlRewriteContext);
         showSQL(sqlRewriteResult.getSql());
         return new SQLUnit(sqlRewriteResult.getSql(), sqlRewriteResult.getParameters());
     }
     
-    private Map<BaseRule, SQLRewriteContextDecorator> createSQLRewriteContextDecorator(final ShadowRule shadowRule) {
-        Map<BaseRule, SQLRewriteContextDecorator> result = new HashMap<>(1, 1);
-        result.put(shadowRule, new ShadowSQLRewriteContextDecorator());
-        return result;
-    }
-    
     private void showSQL(final String sql) {
-        boolean showSQL = connection.getRuntimeContext().getProperties().<Boolean>getValue(PropertiesConstant.SQL_SHOW);
+        boolean showSQL = connection.getRuntimeContext().getProperties().<Boolean>getValue(ConfigurationPropertyKey.SQL_SHOW);
         if (showSQL) {
             log.info("Rule Type: shadow");
             log.info("SQL: {} ::: IsShadowSQL: {}", sql, isShadowSQL);

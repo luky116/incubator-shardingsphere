@@ -19,6 +19,7 @@ package org.apache.shardingsphere.sql.parser.mysql.visitor.impl;
 
 import org.apache.shardingsphere.sql.parser.api.ASTNode;
 import org.apache.shardingsphere.sql.parser.api.visitor.statement.DMLVisitor;
+import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser;
 import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.AliasContext;
 import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.AssignmentContext;
 import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.AssignmentValueContext;
@@ -63,6 +64,10 @@ import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.UnionCl
 import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.UpdateContext;
 import org.apache.shardingsphere.sql.parser.autogen.MySQLStatementParser.WhereClauseContext;
 import org.apache.shardingsphere.sql.parser.mysql.visitor.MySQLVisitor;
+import org.apache.shardingsphere.sql.parser.sql.segment.dml.JoinSpecificationSegment;
+import org.apache.shardingsphere.sql.parser.sql.segment.dml.JoinedTableSegment;
+import org.apache.shardingsphere.sql.parser.sql.segment.dml.TableFactorSegment;
+import org.apache.shardingsphere.sql.parser.sql.segment.dml.TableReferenceSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.assignment.AssignmentSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.assignment.InsertValuesSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.assignment.SetAssignmentSegment;
@@ -72,6 +77,7 @@ import org.apache.shardingsphere.sql.parser.sql.segment.dml.column.OnDuplicateKe
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.expr.ExpressionSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.expr.complex.CommonExpressionSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.expr.simple.LiteralExpressionSegment;
+import org.apache.shardingsphere.sql.parser.sql.segment.dml.expr.subquery.SubqueryExpressionSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.expr.subquery.SubquerySegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.item.AggregationProjectionSegment;
 import org.apache.shardingsphere.sql.parser.sql.segment.dml.item.ColumnProjectionSegment;
@@ -200,7 +206,10 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     @Override
     public ASTNode visitUpdate(final UpdateContext ctx) {
         UpdateStatement result = new UpdateStatement();
-        result.getTables().addAll(((CollectionValue<SimpleTableSegment>) visit(ctx.tableReferences())).getValue());
+        CollectionValue<TableReferenceSegment> tableReferences = (CollectionValue<TableReferenceSegment>) visit(ctx.tableReferences());
+        for (TableReferenceSegment each : tableReferences.getValue()) {
+            result.getTables().addAll(each.getTables());
+        }
         result.setSetAssignment((SetAssignmentSegment) visit(ctx.setAssignmentsClause()));
         if (null != ctx.whereClause()) {
             result.setWhere((WhereSegment) visit(ctx.whereClause()));
@@ -278,7 +287,10 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     public ASTNode visitMultipleTablesClause(final MultipleTablesClauseContext ctx) {
         CollectionValue<SimpleTableSegment> result = new CollectionValue<>();
         result.combine((CollectionValue<SimpleTableSegment>) visit(ctx.multipleTableNames()));
-        result.combine((CollectionValue<SimpleTableSegment>) visit(ctx.tableReferences()));
+        CollectionValue<TableReferenceSegment> tableReferences = (CollectionValue<TableReferenceSegment>) visit(ctx.tableReferences());
+        for (TableReferenceSegment each : tableReferences.getValue()) {
+            result.getValue().addAll(each.getTables());
+        }
         return result;
     }
     
@@ -314,7 +326,11 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
             result.getProjections().setDistinctRow(isDistinct(ctx));
         }
         if (null != ctx.fromClause()) {
-            result.getTables().addAll(((CollectionValue<SimpleTableSegment>) visit(ctx.fromClause())).getValue());
+            CollectionValue<TableReferenceSegment> tableReferences = (CollectionValue<TableReferenceSegment>) visit(ctx.fromClause());
+            for (TableReferenceSegment each : tableReferences.getValue()) {
+                result.getTables().addAll(each.getTables());
+                result.getTableReferences().add(each);
+            }
         }
         if (null != ctx.whereClause()) {
             result.setWhere((WhereSegment) visit(ctx.whereClause()));
@@ -444,8 +460,8 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
             result.setAlias(alias);
             return result;
         }
-        if (projection instanceof SubquerySegment) {
-            SubqueryProjectionSegment result = new SubqueryProjectionSegment((SubquerySegment) projection);
+        if (projection instanceof SubqueryExpressionSegment) {
+            SubqueryProjectionSegment result = new SubqueryProjectionSegment(((SubqueryExpressionSegment) projection).getSubquery());
             result.setAlias(alias);
             return result;
         }
@@ -464,9 +480,9 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     @SuppressWarnings("unchecked")
     @Override
     public ASTNode visitTableReferences(final TableReferencesContext ctx) {
-        CollectionValue<SimpleTableSegment> result = new CollectionValue<>();
+        CollectionValue<TableReferenceSegment> result = new CollectionValue<>();
         for (EscapedTableReferenceContext each : ctx.escapedTableReference()) {
-            result.combine((CollectionValue<SimpleTableSegment>) visit(each));
+            result.getValue().add((TableReferenceSegment) visit(each));
         }
         return result;
     }
@@ -478,17 +494,15 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     
     @Override
     public ASTNode visitTableReference(final TableReferenceContext ctx) {
-        CollectionValue<SimpleTableSegment> result = new CollectionValue<>();
+        TableReferenceSegment result = new TableReferenceSegment();
         if (null != ctx.tableFactor()) {
-            // TODO :Ignore subquery table segment
-            ASTNode tableFactor = visit(ctx.tableFactor());
-            if (tableFactor instanceof SimpleTableSegment) {
-                result.getValue().add((SimpleTableSegment) tableFactor);
-            }
+            TableFactorSegment tableFactor = (TableFactorSegment) visit(ctx.tableFactor());
+            result.setTableFactor(tableFactor);
         }
-        if (null != ctx.joinedTable()) {
+        if (!ctx.joinedTable().isEmpty()) {
             for (JoinedTableContext each : ctx.joinedTable()) {
-                result.getValue().addAll(getTableSegments(result.getValue(), each));
+                JoinedTableSegment joinedTableSegment = (JoinedTableSegment) visit(each);
+                result.getJoinedTables().add(joinedTableSegment);
             }
         }
         return result;
@@ -496,19 +510,26 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     
     @Override
     public ASTNode visitTableFactor(final TableFactorContext ctx) {
-        if (null != ctx.tableName()) {
-            SimpleTableSegment result = (SimpleTableSegment) visit(ctx.tableName());
+        TableFactorSegment result = new TableFactorSegment();
+        if (null != ctx.subquery()) {
+            SelectStatement subquery = (SelectStatement) visit(ctx.subquery());
+            SubquerySegment subquerySegment = new SubquerySegment(ctx.subquery().start.getStartIndex(), ctx.subquery().stop.getStopIndex(), subquery);
+            SubqueryTableSegment subqueryTableSegment = new SubqueryTableSegment(subquerySegment);
             if (null != ctx.alias()) {
-                result.setAlias((AliasSegment) visit(ctx.alias()));
+                subqueryTableSegment.setAlias((AliasSegment) visit(ctx.alias()));
             }
-            return result;
+            result.setTable(subqueryTableSegment);
+        }
+        if (null != ctx.tableName()) {
+            SimpleTableSegment table = (SimpleTableSegment) visit(ctx.tableName());
+            if (null != ctx.alias()) {
+                table.setAlias((AliasSegment) visit(ctx.alias()));
+            }
+            result.setTable(table);
         }
         if (null != ctx.tableReferences()) {
-            return visit(ctx.tableReferences());
-        }
-        SubqueryTableSegment result = new SubqueryTableSegment(new SubquerySegment(ctx.getStart().getStartIndex(), ctx.getStop().getStopIndex(), (SelectStatement) visit(ctx.subquery())));
-        if (null != ctx.alias()) {
-            result.setAlias((AliasSegment) visit(ctx.alias()));
+            CollectionValue<TableReferenceSegment> tableReferences = (CollectionValue) visit(ctx.tableReferences());
+            result.getTableReferences().addAll(tableReferences.getValue());
         }
         return result;
     }
@@ -516,40 +537,31 @@ public final class MySQLDMLVisitor extends MySQLVisitor implements DMLVisitor {
     @SuppressWarnings("unchecked")
     @Override
     public ASTNode visitJoinedTable(final JoinedTableContext ctx) {
-        // TODO :Bad processing for join table
-        CollectionValue<SimpleTableSegment> result = new CollectionValue<>();
-        ASTNode tableFactor = visit(ctx.tableFactor());
-        if (tableFactor instanceof SubqueryTableSegment) {
-            return result;
-        }
-        result.getValue().add((SimpleTableSegment) tableFactor);
+        JoinedTableSegment result = new JoinedTableSegment();
+        TableFactorSegment tableFactor = (TableFactorSegment) visit(ctx.tableFactor());
+        result.setTableFactor(tableFactor);
         if (null != ctx.joinSpecification()) {
-            Collection<SimpleTableSegment> tableSegments = new LinkedList<>();
-            for (SimpleTableSegment each : ((CollectionValue<SimpleTableSegment>) visit(ctx.joinSpecification())).getValue()) {
-                if (isTable(each, Collections.singleton((SimpleTableSegment) tableFactor))) {
-                    tableSegments.add(each);
-                }
-            }
-            result.getValue().addAll(tableSegments);
+            result.setJoinSpecification((JoinSpecificationSegment) visit(ctx.joinSpecification()));
         }
         return result;
     }
     
     @Override
     public ASTNode visitJoinSpecification(final JoinSpecificationContext ctx) {
-        CollectionValue<SimpleTableSegment> result = new CollectionValue<>();
-        if (null == ctx.expr()) {
-            return result;
+        JoinSpecificationSegment result = new JoinSpecificationSegment();
+        if (null != ctx.expr()) {
+            ASTNode expr = visit(ctx.expr());
+            if (expr instanceof PredicateSegment) {
+                PredicateSegment predicate = (PredicateSegment) expr;
+                result.setPredicateSegment(predicate);
+            }
         }
-        ASTNode expr = visit(ctx.expr());
-        if (expr instanceof PredicateSegment) {
-            PredicateSegment predicate = (PredicateSegment) expr;
-            if (predicate.getColumn().getOwner().isPresent()) {
-                result.getValue().add(createTableSegment(predicate.getColumn().getOwner().get()));
+        if (null != ctx.USING()) {
+            Collection<ColumnSegment> columnSegmentList = new LinkedList<>();
+            for (MySQLStatementParser.ColumnNameContext cname :ctx.columnNames().columnName()) {
+                columnSegmentList.add((ColumnSegment) visit(cname));
             }
-            if (predicate.getRightValue() instanceof ColumnSegment && ((ColumnSegment) predicate.getRightValue()).getOwner().isPresent()) {
-                result.getValue().add(createTableSegment(((ColumnSegment) predicate.getRightValue()).getOwner().get()));
-            }
+            result.setUsingColumns(columnSegmentList);
         }
         return result;
     }
